@@ -7,41 +7,52 @@
   <style>
     * { box-sizing: border-box; }
     :root {
-      --p1: #2563eb;
-      --p2: #16a34a;
+      --p1: #93c5fd;
+      --p2: #86efac;
       --muted: #64748b;
     }
     body {
       font-family: Arial, sans-serif;
       margin: 0;
-      padding: 24px;
+      padding: 8px;
       background: #f8fafc;
       color: #0f172a;
     }
     .wrap { max-width: 980px; margin: 0 auto; }
-    h1 { margin: 0 0 16px; display: inline-flex; align-items: center; gap: 10px; }
-    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-    .board { min-height: 64px; padding: 8px 0; overflow-x: auto; }
+    h1 { margin: 0 0 8px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 1.1rem; }
+    .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    .board {
+      min-height: 42px;
+      padding: 4px 0;
+      width: 100%;
+      gap: 0;
+      overflow-x: auto;
+      flex-wrap: nowrap;
+      -webkit-overflow-scrolling: touch;
+    }
+    .board > * { flex: 0 0 auto; }
     .cell, .entry {
-      width: 52px;
-      height: 52px;
-      border-radius: 10px;
+      width: 26px;
+      height: 26px;
+      border-radius: 5px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      font-size: 1.25rem;
-      font-weight: 700;
-      text-transform: lowercase;
+      font-size: .75rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: .02em;
     }
-    .cell { color: white; border: 2px solid transparent; }
+    .cell { color: #0f172a; border: 1px solid rgba(15, 23, 42, 0.22); }
     .p1 { background: var(--p1); }
     .p2 { background: var(--p2); }
     .entry {
       border: 2px dashed #94a3b8;
       outline: none;
-      background: white;
+      background: #ffffff;
       text-align: center;
       font-size: 16px;
+      font-weight: 500;
     }
     .entry.p1 { border-color: var(--p1); color: var(--p1); }
     .entry.p2 { border-color: var(--p2); color: var(--p2); }
@@ -49,45 +60,60 @@
       border: 1px solid #334155;
       background: white;
       color: #334155;
-      padding: 8px 12px;
-      min-height: 44px;
-      border-radius: 8px;
+      padding: 4px 8px;
+      min-height: 30px;
+      border-radius: 6px;
       cursor: pointer;
       font-weight: 600;
+      font-size: 13px;
     }
     .btn.warn { border-color: #7c2d12; background: #fff7ed; color: #9a3412; }
     .btn.ok { border-color: #14532d; background: #ecfdf5; color: #166534; }
     .btn:disabled { opacity: .6; cursor: not-allowed; }
-    .cards { margin-top: 16px; display: grid; gap: 10px; width: 100%; max-width: 720px; }
+    .cards {
+      margin-top: 8px;
+      display: grid;
+      gap: 6px;
+      width: 100%;
+      max-width: 720px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
     .card {
-      border: 2px solid #cbd5e1;
-      border-radius: 10px;
-      padding: 12px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      padding: 8px;
       min-width: 0;
       width: 100%;
       background: #f8fafc;
       transition: .12s ease all;
     }
     .card.active { opacity: 1; transform: scale(1); }
-    .card.inactive { opacity: .5; transform: scale(.99); }
+    .card.inactive { opacity: .7; transform: scale(.99); }
     .card.win { background: #ecfdf5; }
     .card.lose { background: #fff1f2; }
-    .title { font-weight: 700; margin-bottom: 4px; }
-    .meta { color: #334155; font-size: 12px; }
-    ul { margin: 8px 0 0; padding-left: 18px; }
-    li { margin-bottom: 4px; }
+    .title { font-weight: 700; margin-bottom: 2px; font-size: 13px; }
+    .meta { color: #334155; font-size: 11px; }
+    ul { margin: 6px 0 0; padding-left: 14px; font-size: 11px; }
+    li { margin-bottom: 2px; }
+    .card .btn {
+      width: auto;
+      min-height: 24px;
+      padding: 2px 6px;
+      font-size: 11px;
+    }
 
     @media (max-width: 640px) {
-      body { padding: 12px; }
-      h1 { font-size: 1.35rem; line-height: 1.25; }
-      .row { gap: 8px; }
+      body { padding: 6px; }
+      h1 { font-size: 1rem; line-height: 1.15; margin-bottom: 6px; }
+      .row { gap: 6px; }
+      .board { gap: 0; }
       .cell, .entry {
-        width: 46px;
-        height: 46px;
-        border-radius: 9px;
-        font-size: 1.1rem;
+        width: 24px;
+        height: 24px;
+        border-radius: 4px;
+        font-size: .7rem;
       }
-      .btn { width: 100%; }
+      #newRound { width: 100%; min-height: 30px; }
     }
   </style>
 </head>
@@ -97,7 +123,7 @@
 
     <div class="row board" id="board"></div>
 
-    <div class="row" style="margin-top: 8px;">
+    <div class="row" style="margin-top: 4px;">
       <button class="btn" id="newRound">New Round</button>
     </div>
 
@@ -178,12 +204,12 @@
     function playerActions(player) {
       if (state.ended) return [];
       if (state.letters.length === 0) {
-        return player === state.turn ? ['Enter one letter in the center box to start.'] : [`Wait for Player ${state.turn} to start.`];
+        return player === state.turn ? ['Enter one center letter.'] : [`Wait for Player ${state.turn}.`];
       }
       if (state.mode === 'challenge') {
-        return player === state.challengeDefender ? ['1. Complete your word (minimum 2 letters).', 'LOCK'] : [`Wait while Player ${state.challengeDefender} completes or locks the word.`];
+        return player === state.challengeDefender ? ['1. Finish word (2+ letters)', 'LOCK'] : [`Wait for Player ${state.challengeDefender}.`];
       }
-      return player === state.turn ? ['Play: add one letter to the left or right edge.', 'CHALLENGE'] : ['Wait for your turn.'];
+      return player === state.turn ? ['Add a letter', 'CHALLENGE'] : ['Wait your turn.'];
     }
 
     function renderCards() {
@@ -212,7 +238,7 @@
           actions.forEach((a) => {
             const li = document.createElement('li');
             if (a === 'CHALLENGE') {
-              li.append('Or click ');
+              li.append('Or ');
               const btn = document.createElement('button');
               btn.className = 'btn warn';
               btn.textContent = 'Challenge';
@@ -227,7 +253,7 @@
               li.append('2. Click ');
               const btn = document.createElement('button');
               btn.className = 'btn ok';
-              btn.textContent = state.validating ? 'Validating...' : "I think it's a real word :)";
+              btn.textContent = state.validating ? 'Validating...' : "It's a real word :)";
               const tooShort = fragment().length < 2;
               btn.disabled = state.validating || tooShort;
               btn.title = tooShort ? 'Add at least one more letter before locking.' : 'Lock and validate';
@@ -260,17 +286,18 @@
         if (state.ended && state.result) {
           const msg = document.createElement('div');
           msg.style.marginTop = '8px';
-          msg.style.fontWeight = '600';
+          msg.style.fontWeight = '400';
+          msg.style.fontSize = '11px';
           if (state.result.isRealWord) {
             msg.style.color = p === state.result.winner ? '#166534' : '#9f1239';
             msg.innerHTML = p === state.result.winner
-              ? `<strong>${state.result.word}</strong> makes a delicious sandwich.`
+              ? `<strong>${state.result.word.toUpperCase()}</strong> makes a delicious sandwich.`
               : `No sandwich for you.`;
           } else {
             msg.style.color = p === state.result.winner ? '#166534' : '#9f1239';
             msg.innerHTML = p === state.result.winner
-              ? `Player ${state.result.defender} can't spell. You get the sandwich.`
-              : `<strong>${state.result.word}</strong> isn't a word. No sandwich for you!`;
+              ? `<strong>Player ${state.result.defender}</strong> can't spell. You get the sandwich.`
+              : `<strong>${state.result.word.toUpperCase()}</strong> isn't a word. No sandwich for you!`;
           }
           card.appendChild(msg);
         }
