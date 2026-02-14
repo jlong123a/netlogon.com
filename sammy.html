@@ -76,7 +76,7 @@
       gap: 6px;
       width: 100%;
       max-width: 720px;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: 1fr;
     }
     .card {
       border: 1px solid #cbd5e1;
@@ -91,8 +91,14 @@
     .card.inactive { opacity: .7; transform: scale(.99); }
     .card.win { background: #ecfdf5; }
     .card.lose { background: #fff1f2; }
-    .title { font-weight: 700; margin-bottom: 2px; font-size: 13px; }
-    .meta { color: #334155; font-size: 11px; }
+    .card-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 6px;
+    }
+    .title { font-weight: 700; margin-bottom: 0; font-size: 13px; }
+    .meta { color: #334155; font-size: 11px; white-space: nowrap; }
     ul { margin: 6px 0 0; padding-left: 14px; font-size: 11px; }
     li { margin-bottom: 2px; }
     .card .btn {
@@ -100,6 +106,71 @@
       min-height: 24px;
       padding: 2px 6px;
       font-size: 11px;
+    }
+    .word-info {
+      margin-top: 6px;
+      padding: 6px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      background: #ffffff;
+      font-size: 11px;
+      line-height: 1.3;
+      color: #0f172a;
+    }
+    .word-info .label {
+      color: #475569;
+      font-weight: 600;
+    }
+    .settings {
+      margin-top: 8px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 0;
+      max-width: 720px;
+      overflow: hidden;
+    }
+    .settings summary {
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+      color: #0f172a;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 10px;
+      background: #eef2f7;
+      border-bottom: 1px solid #cbd5e1;
+    }
+    .settings summary::-webkit-details-marker { display: none; }
+    .settings summary::after {
+      content: '▾';
+      font-size: 12px;
+      color: #475569;
+    }
+    .settings:not([open]) summary::after { content: '▸'; }
+    .settings-grid {
+      margin-top: 0;
+      display: grid;
+      gap: 8px;
+      padding: 8px;
+    }
+    .field label {
+      display: block;
+      font-size: 11px;
+      color: #475569;
+      margin-bottom: 2px;
+    }
+    .field input, .field select {
+      width: 100%;
+      min-height: 26px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      padding: 3px 6px;
+      font-size: 12px;
+      background: #fff;
+      color: #0f172a;
     }
 
     @media (max-width: 640px) {
@@ -128,6 +199,28 @@
     </div>
 
     <div class="cards" id="cards"></div>
+
+    <details class="settings" open>
+      <summary>Settings</summary>
+      <div class="settings-grid">
+        <div class="field">
+          <label for="langMode">Language</label>
+          <select id="langMode">
+            <option value="en" selected>English</option>
+            <option value="fr">French</option>
+            <option value="en-fr">English + French</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="player1Name">Player 1 Name</label>
+          <input id="player1Name" type="text" maxlength="24" placeholder="Player 1" />
+        </div>
+        <div class="field">
+          <label for="player2Name">Player 2 Name</label>
+          <input id="player2Name" type="text" maxlength="24" placeholder="Player 2" />
+        </div>
+      </div>
+    </details>
   </div>
 
   <script>
@@ -142,15 +235,49 @@
       winner: null,
       starter: 1,
       score: { 1: { wins: 0, losses: 0 }, 2: { wins: 0, losses: 0 } },
-      result: null, // {word,isRealWord,winner,loser,defender}
+      result: null, // {word,isRealWord,winner,loser,defender,wordInfo}
     };
 
     const board = document.getElementById('board');
     const cards = document.getElementById('cards');
     const newRoundBtn = document.getElementById('newRound');
+    const WIKTIONARY_API_BASE = 'https://en.wiktionary.org';
+    const ENGLISH_API_BASE = 'https://api.dictionaryapi.dev/api/v2/entries/en';
+    const langModeSelect = document.getElementById('langMode');
+    const player1NameInput = document.getElementById('player1Name');
+    const player2NameInput = document.getElementById('player2Name');
+    const settings = {
+      langMode: 'en',
+      names: { 1: 'Player 1', 2: 'Player 2' },
+    };
+    const SETTINGS_STORAGE_KEY = 'wordSandwichSettings';
 
     const fragment = () => state.letters.map(x => x.char).join('');
-    const sanitize = (v) => ((v || '').toLowerCase().match(/[a-z]/) || [''])[0];
+    const sanitize = (v) => ((v || '').toLowerCase().match(/\p{L}/u) || [''])[0];
+
+    function loadSettings() {
+      try {
+        const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        const mode = parsed?.langMode;
+        const p1 = (parsed?.names?.[1] || parsed?.names?.['1'] || '').toString().trim();
+        const p2 = (parsed?.names?.[2] || parsed?.names?.['2'] || '').toString().trim();
+        if (mode === 'en' || mode === 'fr' || mode === 'en-fr') settings.langMode = mode;
+        if (p1) settings.names[1] = p1;
+        if (p2) settings.names[2] = p2;
+      } catch {
+        // Ignore corrupted local settings.
+      }
+    }
+
+    function saveSettings() {
+      try {
+        localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+      } catch {
+        // Ignore storage write failures.
+      }
+    }
 
     function resetRound() {
       state.letters = [];
@@ -165,15 +292,79 @@
       render();
     }
 
-    async function isRealWord(word) {
+    function htmlToText(html) {
+      const div = document.createElement('div');
+      div.innerHTML = html || '';
+      return (div.textContent || '').trim();
+    }
+
+    function getWiktionaryEntry(data, lang) {
+      const expectedLanguage = lang === 'fr' ? 'French' : 'English';
+      const entries = data?.[lang];
+      if (!Array.isArray(entries) || entries.length === 0) return null;
+      return entries.find((entry) => {
+        if (entry?.language !== expectedLanguage) return false;
+        if (entry?.partOfSpeech === 'Symbol') return false;
+        return Array.isArray(entry.definitions) && entry.definitions.length > 0;
+      });
+    }
+
+    function playerName(player) {
+      return settings.names[player] || `Player ${player}`;
+    }
+
+    async function isEnglishWord(word) {
       try {
-        const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`);
-        if (!res.ok) return false;
+        const res = await fetch(`${ENGLISH_API_BASE}/${encodeURIComponent(word)}`);
+        if (!res.ok) return { ok: false, info: null };
         const data = await res.json();
-        return Array.isArray(data) && data.length > 0;
+        if (!Array.isArray(data) || data.length === 0) return { ok: false, info: null };
+        const first = data[0];
+        const meaning = Array.isArray(first.meanings) ? first.meanings[0] : null;
+        const def = meaning && Array.isArray(meaning.definitions) ? meaning.definitions[0] : null;
+        return {
+          ok: true,
+          info: {
+            language: 'English',
+            partOfSpeech: meaning?.partOfSpeech || '',
+            definition: def?.definition || '',
+            source: 'DictionaryAPI',
+          }
+        };
       } catch {
-        return false;
+        return { ok: false, info: null };
       }
+    }
+
+    async function isFrenchWord(word) {
+      try {
+        const res = await fetch(`${WIKTIONARY_API_BASE}/api/rest_v1/page/definition/${encodeURIComponent(word)}`);
+        if (!res.ok) return { ok: false, info: null };
+        const data = await res.json();
+        const entry = getWiktionaryEntry(data, 'fr');
+        if (!entry) return { ok: false, info: null };
+        const firstDef = Array.isArray(entry.definitions) ? entry.definitions[0] : null;
+        return {
+          ok: true,
+          info: {
+            language: 'French',
+            partOfSpeech: entry.partOfSpeech || '',
+            definition: htmlToText(firstDef?.definition || ''),
+            source: 'Wiktionary',
+          }
+        };
+      } catch {
+        return { ok: false, info: null };
+      }
+    }
+
+    async function isRealWord(word) {
+      if (settings.langMode === 'en') return isEnglishWord(word);
+      if (settings.langMode === 'fr') return isFrenchWord(word);
+      const [enResult, frResult] = await Promise.all([isEnglishWord(word), isFrenchWord(word)]);
+      if (enResult.ok) return enResult;
+      if (frResult.ok) return frResult;
+      return { ok: false, info: null };
     }
 
     function appendLetter(side, player, letter) {
@@ -196,41 +387,50 @@
     }
 
     function playerTitle(player) {
-      if (!state.ended || !state.winner) return `Player ${player}`;
-      if (state.winner === player) return `Player ${player} 🥪 Wins 🥪`;
-      return `Player ${player} 😢 Loses 😢`;
+      if (!state.ended || !state.winner) return playerName(player);
+      if (state.winner === player) return `${playerName(player)} Wins`;
+      return `${playerName(player)} Loses`;
     }
 
     function playerActions(player) {
       if (state.ended) return [];
       if (state.letters.length === 0) {
-        return player === state.turn ? ['Enter one center letter.'] : [`Wait for Player ${state.turn}.`];
+        return player === state.turn ? ['Enter a letter.'] : [`Wait for ${playerName(state.turn)}.`];
       }
       if (state.mode === 'challenge') {
-        return player === state.challengeDefender ? ['1. Finish word (2+ letters)', 'LOCK'] : [`Wait for Player ${state.challengeDefender}.`];
+        return player === state.challengeDefender ? ['1. Finish word (2+ letters)', 'LOCK'] : [`Wait for ${playerName(state.challengeDefender)}.`];
       }
       return player === state.turn ? ['Add a letter', 'CHALLENGE'] : ['Wait your turn.'];
     }
 
     function renderCards() {
       cards.innerHTML = '';
-      [1,2].forEach((p) => {
+      const activePlayer = state.letters.length === 0
+        ? state.turn
+        : (state.mode === 'challenge' ? state.challengeDefender : state.turn);
+      const firstPlayer = state.ended && state.winner ? state.winner : activePlayer;
+      const secondPlayer = firstPlayer === 1 ? 2 : 1;
+
+      [firstPlayer, secondPlayer].forEach((p) => {
         const active = !state.ended && ((state.letters.length === 0 ? state.turn : (state.mode === 'challenge' ? state.challengeDefender : state.turn)) === p);
         const card = document.createElement('div');
         const focusClass = state.ended ? '' : (active ? 'active' : 'inactive');
         card.className = `card ${focusClass} ${state.ended ? (state.winner===p?'win':'lose') : ''}`;
         card.style.borderColor = p === 1 ? '#2563eb' : '#16a34a';
+        const head = document.createElement('div');
+        head.className = 'card-head';
 
         const title = document.createElement('div');
         title.className = 'title';
         title.style.color = p === 1 ? '#1d4ed8' : '#15803d';
         title.textContent = playerTitle(p);
-        card.appendChild(title);
+        head.appendChild(title);
 
         const meta = document.createElement('div');
         meta.className = 'meta';
-        meta.textContent = `Wins: ${state.score[p].wins} · Losses: ${state.score[p].losses}`;
-        card.appendChild(meta);
+        meta.textContent = `W: ${state.score[p].wins}  L: ${state.score[p].losses}`;
+        head.appendChild(meta);
+        card.appendChild(head);
 
         const actions = playerActions(p);
         if (active && actions.length) {
@@ -262,7 +462,8 @@
                 state.validating = true;
                 render();
                 const word = fragment().toLowerCase();
-                const ok = await isRealWord(word);
+                const verdict = await isRealWord(word);
+                const ok = verdict.ok;
                 const winner = ok ? state.challengeDefender : state.challengeBy;
                 const loser = winner === 1 ? 2 : 1;
                 state.validating = false;
@@ -271,7 +472,14 @@
                 state.starter = winner;
                 state.score[winner].wins += 1;
                 state.score[loser].losses += 1;
-                state.result = { word, isRealWord: ok, winner, loser, defender: state.challengeDefender };
+                state.result = {
+                  word,
+                  isRealWord: ok,
+                  winner,
+                  loser,
+                  defender: state.challengeDefender,
+                  wordInfo: verdict.info
+                };
                 render();
               };
               li.appendChild(btn);
@@ -291,15 +499,43 @@
           if (state.result.isRealWord) {
             msg.style.color = p === state.result.winner ? '#166534' : '#9f1239';
             msg.innerHTML = p === state.result.winner
-              ? `<strong>${state.result.word.toUpperCase()}</strong> makes a delicious sandwich.`
+              ? `<strong>"${state.result.word.toUpperCase()}"</strong> makes a delicious sandwich.`
               : `No sandwich for you.`;
           } else {
             msg.style.color = p === state.result.winner ? '#166534' : '#9f1239';
             msg.innerHTML = p === state.result.winner
-              ? `<strong>Player ${state.result.defender}</strong> can't spell. You get the sandwich.`
-              : `<strong>${state.result.word.toUpperCase()}</strong> isn't a word. No sandwich for you!`;
+              ? `<strong>${playerName(state.result.defender)}</strong> can't spell. You get the sandwich.`
+              : `<strong>"${state.result.word.toUpperCase()}"</strong> isn't a word. No sandwich for you!`;
           }
           card.appendChild(msg);
+        }
+
+        if (
+          state.ended &&
+          state.result &&
+          p === state.result.winner &&
+          state.result.isRealWord &&
+          state.result.wordInfo
+        ) {
+          const info = state.result.wordInfo;
+          const infoBox = document.createElement('div');
+          infoBox.className = 'word-info';
+
+          const addRow = (label, value) => {
+            const row = document.createElement('div');
+            const labelEl = document.createElement('span');
+            labelEl.className = 'label';
+            labelEl.textContent = `${label}: `;
+            row.appendChild(labelEl);
+            row.appendChild(document.createTextNode(value || 'N/A'));
+            infoBox.appendChild(row);
+          };
+
+          addRow('Definition', info.definition);
+          addRow('Type', info.partOfSpeech);
+          addRow('Language', info.language);
+          addRow('Source', info.source);
+          card.appendChild(infoBox);
         }
 
         cards.appendChild(card);
@@ -371,7 +607,27 @@
     }
 
     newRoundBtn.addEventListener('click', resetRound);
+    langModeSelect.addEventListener('change', () => {
+      settings.langMode = langModeSelect.value;
+      saveSettings();
+    });
+    player1NameInput.addEventListener('input', () => {
+      settings.names[1] = player1NameInput.value.trim() || 'Player 1';
+      saveSettings();
+      render();
+    });
+    player2NameInput.addEventListener('input', () => {
+      settings.names[2] = player2NameInput.value.trim() || 'Player 2';
+      saveSettings();
+      render();
+    });
+    loadSettings();
+    player1NameInput.value = settings.names[1];
+    player2NameInput.value = settings.names[2];
+    langModeSelect.value = settings.langMode;
     render();
   </script>
 </body>
 </html>
+
+
