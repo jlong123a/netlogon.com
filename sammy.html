@@ -172,12 +172,39 @@
       background: #fff;
       color: #0f172a;
     }
+    .timer-fields {
+      display: grid;
+      grid-template-columns: 1fr 110px;
+      gap: 8px;
+      align-items: end;
+    }
+    .timer-status {
+      margin-top: 2px;
+      font-size: 11px;
+      color: #475569;
+      min-height: 14px;
+    }
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 26px;
+      font-size: 12px;
+      color: #0f172a;
+      font-weight: 400;
+    }
+    .checkbox-row input[type="checkbox"] {
+      width: auto;
+      min-height: 0;
+      margin: 0;
+    }
 
     @media (max-width: 640px) {
       body { padding: 6px; }
       h1 { font-size: 1rem; line-height: 1.15; margin-bottom: 6px; }
       .row { gap: 6px; }
       .board { gap: 0; }
+      .timer-fields { grid-template-columns: 1fr 92px; }
       .cell, .entry {
         width: 24px;
         height: 24px;
@@ -197,6 +224,7 @@
     <div class="row" style="margin-top: 4px;">
       <button class="btn" id="newRound">New Round</button>
     </div>
+    <div class="timer-status" id="timerStatus"></div>
 
     <div class="cards" id="cards"></div>
 
@@ -218,6 +246,19 @@
         <div class="field">
           <label for="player2Name">Player 2 Name</label>
           <input id="player2Name" type="text" maxlength="24" placeholder="Player 2" />
+        </div>
+        <div class="timer-fields">
+          <div class="field">
+            <label for="enableTimer">Turn Timer</label>
+            <div class="checkbox-row">
+              <input id="enableTimer" type="checkbox" />
+              <span>Enable timer</span>
+            </div>
+          </div>
+          <div class="field">
+            <label for="timerSeconds">Seconds</label>
+            <input id="timerSeconds" type="number" min="3" max="120" step="1" value="10" />
+          </div>
         </div>
       </div>
     </details>
@@ -241,16 +282,25 @@
     const board = document.getElementById('board');
     const cards = document.getElementById('cards');
     const newRoundBtn = document.getElementById('newRound');
+    const timerStatus = document.getElementById('timerStatus');
     const WIKTIONARY_API_BASE = 'https://en.wiktionary.org';
     const ENGLISH_API_BASE = 'https://api.dictionaryapi.dev/api/v2/entries/en';
     const langModeSelect = document.getElementById('langMode');
     const player1NameInput = document.getElementById('player1Name');
     const player2NameInput = document.getElementById('player2Name');
+    const enableTimerInput = document.getElementById('enableTimer');
+    const timerSecondsInput = document.getElementById('timerSeconds');
     const settings = {
       langMode: 'en',
       names: { 1: 'Player 1', 2: 'Player 2' },
+      timerEnabled: false,
+      timerSeconds: 10,
     };
     const SETTINGS_STORAGE_KEY = 'wordSandwichSettings';
+    let turnTimerHandle = null;
+    let turnTickerHandle = null;
+    let turnTimerContext = '';
+    let turnSecondsLeft = 0;
 
     const fragment = () => state.letters.map(x => x.char).join('');
     const sanitize = (v) => ((v || '').toLowerCase().match(/\p{L}/u) || [''])[0];
@@ -263,9 +313,15 @@
         const mode = parsed?.langMode;
         const p1 = (parsed?.names?.[1] || parsed?.names?.['1'] || '').toString().trim();
         const p2 = (parsed?.names?.[2] || parsed?.names?.['2'] || '').toString().trim();
+        const timerEnabled = !!parsed?.timerEnabled;
+        const timerSeconds = Number(parsed?.timerSeconds);
         if (mode === 'en' || mode === 'fr' || mode === 'en-fr') settings.langMode = mode;
         if (p1) settings.names[1] = p1;
         if (p2) settings.names[2] = p2;
+        settings.timerEnabled = timerEnabled;
+        if (Number.isFinite(timerSeconds) && timerSeconds >= 3 && timerSeconds <= 120) {
+          settings.timerSeconds = Math.floor(timerSeconds);
+        }
       } catch {
         // Ignore corrupted local settings.
       }
@@ -279,7 +335,75 @@
       }
     }
 
+    function clearTurnTimer(resetContext = true) {
+      if (turnTimerHandle) clearTimeout(turnTimerHandle);
+      if (turnTickerHandle) clearInterval(turnTickerHandle);
+      turnTimerHandle = null;
+      turnTickerHandle = null;
+      turnSecondsLeft = 0;
+      if (resetContext) turnTimerContext = '';
+    }
+
+    function activeTimedPlayer() {
+      if (!settings.timerEnabled || state.ended || state.validating) return null;
+      if (state.letters.length === 0) return null;
+      return state.mode === 'challenge' ? state.challengeDefender : state.turn;
+    }
+
+    function updateTimerStatus() {
+      const player = activeTimedPlayer();
+      if (!settings.timerEnabled || !player || turnSecondsLeft <= 0) {
+        timerStatus.textContent = '';
+        return;
+      }
+      timerStatus.textContent = `${playerName(player)}: ${turnSecondsLeft}s`;
+    }
+
+    function applyTimeoutLoss(slowPlayer) {
+      if (state.ended || state.validating) return;
+      const winner = slowPlayer === 1 ? 2 : 1;
+      const loser = slowPlayer;
+      state.ended = true;
+      state.winner = winner;
+      state.starter = winner;
+      state.score[winner].wins += 1;
+      state.score[loser].losses += 1;
+      state.result = {
+        reason: 'timeout',
+        slowPlayer,
+        winner,
+        loser,
+      };
+      clearTurnTimer();
+      render();
+    }
+
+    function startTurnTimer(player, contextKey) {
+      clearTurnTimer(false);
+      turnTimerContext = contextKey;
+      turnSecondsLeft = settings.timerSeconds;
+      updateTimerStatus();
+      turnTickerHandle = setInterval(() => {
+        turnSecondsLeft = Math.max(0, turnSecondsLeft - 1);
+        updateTimerStatus();
+      }, 1000);
+      turnTimerHandle = setTimeout(() => applyTimeoutLoss(player), settings.timerSeconds * 1000);
+    }
+
+    function syncTurnTimer() {
+      const player = activeTimedPlayer();
+      if (!player) {
+        clearTurnTimer();
+        updateTimerStatus();
+        return;
+      }
+      const contextKey = `${player}|${state.mode}|${state.letters.length === 0 ? 'start' : 'play'}`;
+      if (turnTimerContext !== contextKey) startTurnTimer(player, contextKey);
+      else updateTimerStatus();
+    }
+
     function resetRound() {
+      clearTurnTimer();
       state.letters = [];
       state.turn = state.starter;
       state.mode = 'normal';
@@ -473,6 +597,7 @@
                 state.score[winner].wins += 1;
                 state.score[loser].losses += 1;
                 state.result = {
+                  reason: 'word',
                   word,
                   isRealWord: ok,
                   winner,
@@ -496,7 +621,12 @@
           msg.style.marginTop = '8px';
           msg.style.fontWeight = '400';
           msg.style.fontSize = '11px';
-          if (state.result.isRealWord) {
+          if (state.result.reason === 'timeout') {
+            msg.style.color = p === state.result.winner ? '#166534' : '#9f1239';
+            msg.innerHTML = p === state.result.winner
+              ? `Player <strong>${playerName(state.result.slowPlayer)}</strong> is too slow, You eat their sandwich`
+              : `You snooze, you lose!`;
+          } else if (state.result.isRealWord) {
             msg.style.color = p === state.result.winner ? '#166534' : '#9f1239';
             msg.innerHTML = p === state.result.winner
               ? `<strong>"${state.result.word.toUpperCase()}"</strong> makes a delicious sandwich.`
@@ -604,6 +734,7 @@
     function render() {
       renderBoard();
       renderCards();
+      syncTurnTimer();
     }
 
     newRoundBtn.addEventListener('click', resetRound);
@@ -621,10 +752,28 @@
       saveSettings();
       render();
     });
+    enableTimerInput.addEventListener('change', () => {
+      settings.timerEnabled = enableTimerInput.checked;
+      timerSecondsInput.disabled = !settings.timerEnabled;
+      turnTimerContext = '';
+      saveSettings();
+      syncTurnTimer();
+    });
+    timerSecondsInput.addEventListener('change', () => {
+      const next = Math.max(3, Math.min(120, Number(timerSecondsInput.value) || 10));
+      settings.timerSeconds = Math.floor(next);
+      timerSecondsInput.value = String(settings.timerSeconds);
+      turnTimerContext = '';
+      saveSettings();
+      syncTurnTimer();
+    });
     loadSettings();
     player1NameInput.value = settings.names[1];
     player2NameInput.value = settings.names[2];
     langModeSelect.value = settings.langMode;
+    enableTimerInput.checked = settings.timerEnabled;
+    timerSecondsInput.value = String(settings.timerSeconds);
+    timerSecondsInput.disabled = !settings.timerEnabled;
     render();
   </script>
 </body>
