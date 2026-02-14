@@ -3,8 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Word Sandwich Showdown</title>
+  <title>Word Sandwich</title>
   <style>
+    * { box-sizing: border-box; }
     :root {
       --p1: #2563eb;
       --p2: #16a34a;
@@ -40,6 +41,7 @@
       outline: none;
       background: white;
       text-align: center;
+      font-size: 16px;
     }
     .entry.p1 { border-color: var(--p1); color: var(--p1); }
     .entry.p2 { border-color: var(--p2); color: var(--p2); }
@@ -48,6 +50,7 @@
       background: white;
       color: #334155;
       padding: 8px 12px;
+      min-height: 44px;
       border-radius: 8px;
       cursor: pointer;
       font-weight: 600;
@@ -55,12 +58,13 @@
     .btn.warn { border-color: #7c2d12; background: #fff7ed; color: #9a3412; }
     .btn.ok { border-color: #14532d; background: #ecfdf5; color: #166534; }
     .btn:disabled { opacity: .6; cursor: not-allowed; }
-    .cards { margin-top: 16px; display: grid; gap: 10px; width: fit-content; }
+    .cards { margin-top: 16px; display: grid; gap: 10px; width: 100%; max-width: 720px; }
     .card {
       border: 2px solid #cbd5e1;
       border-radius: 10px;
       padding: 12px;
-      min-width: 320px;
+      min-width: 0;
+      width: 100%;
       background: #f8fafc;
       transition: .12s ease all;
     }
@@ -72,6 +76,19 @@
     .meta { color: #334155; font-size: 12px; }
     ul { margin: 8px 0 0; padding-left: 18px; }
     li { margin-bottom: 4px; }
+
+    @media (max-width: 640px) {
+      body { padding: 12px; }
+      h1 { font-size: 1.35rem; line-height: 1.25; }
+      .row { gap: 8px; }
+      .cell, .entry {
+        width: 46px;
+        height: 46px;
+        border-radius: 9px;
+        font-size: 1.1rem;
+      }
+      .btn { width: 100%; }
+    }
   </style>
 </head>
 <body>
