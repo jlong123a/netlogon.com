@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Word Sandwich Showdown</title>
+  <style>
+    :root {
+      --p1: #2563eb;
+      --p2: #16a34a;
+      --muted: #64748b;
+    }
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 24px;
+      background: #f8fafc;
+      color: #0f172a;
+    }
+    .wrap { max-width: 980px; margin: 0 auto; }
+    h1 { margin: 0 0 16px; display: inline-flex; align-items: center; gap: 10px; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .board { min-height: 64px; padding: 8px 0; overflow-x: auto; }
+    .cell, .entry {
+      width: 52px;
+      height: 52px;
+      border-radius: 10px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.25rem;
+      font-weight: 700;
+      text-transform: lowercase;
+    }
+    .cell { color: white; border: 2px solid transparent; }
+    .p1 { background: var(--p1); }
+    .p2 { background: var(--p2); }
+    .entry {
+      border: 2px dashed #94a3b8;
+      outline: none;
+      background: white;
+      text-align: center;
+    }
+    .entry.p1 { border-color: var(--p1); color: var(--p1); }
+    .entry.p2 { border-color: var(--p2); color: var(--p2); }
+    .btn {
+      border: 1px solid #334155;
+      background: white;
+      color: #334155;
+      padding: 8px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .btn.warn { border-color: #7c2d12; background: #fff7ed; color: #9a3412; }
+    .btn.ok { border-color: #14532d; background: #ecfdf5; color: #166534; }
+    .btn:disabled { opacity: .6; cursor: not-allowed; }
+    .cards { margin-top: 16px; display: grid; gap: 10px; width: fit-content; }
+    .card {
+      border: 2px solid #cbd5e1;
+      border-radius: 10px;
+      padding: 12px;
+      min-width: 320px;
+      background: #f8fafc;
+      transition: .12s ease all;
+    }
+    .card.active { opacity: 1; transform: scale(1); }
+    .card.inactive { opacity: .5; transform: scale(.99); }
+    .card.win { background: #ecfdf5; }
+    .card.lose { background: #fff1f2; }
+    .title { font-weight: 700; margin-bottom: 4px; }
+    .meta { color: #334155; font-size: 12px; }
+    ul { margin: 8px 0 0; padding-left: 18px; }
+    li { margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1><span style="font-size:1.5em">🥖</span> Word Sandwich<span style="font-size:1.5em">🥖</span></h1>
+
+    <div class="row board" id="board"></div>
+
+    <div class="row" style="margin-top: 8px;">
+      <button class="btn" id="newRound">New Round</button>
+    </div>
+
+    <div class="cards" id="cards"></div>
+  </div>
+
+  <script>
+    const state = {
+      letters: [], // {char, player}
+      turn: 1,
+      mode: 'normal', // normal | challenge
+      challengeBy: null,
+      challengeDefender: null,
+      ended: false,
+      validating: false,
+      winner: null,
+      starter: 1,
+      score: { 1: { wins: 0, losses: 0 }, 2: { wins: 0, losses: 0 } },
+      result: null, // {word,isRealWord,winner,loser,defender}
+    };
+
+    const board = document.getElementById('board');
+    const cards = document.getElementById('cards');
+    const newRoundBtn = document.getElementById('newRound');
+
+    const fragment = () => state.letters.map(x => x.char).join('');
+    const sanitize = (v) => ((v || '').toLowerCase().match(/[a-z]/) || [''])[0];
+
+    function resetRound() {
+      state.letters = [];
+      state.turn = state.starter;
+      state.mode = 'normal';
+      state.challengeBy = null;
+      state.challengeDefender = null;
+      state.ended = false;
+      state.validating = false;
+      state.winner = null;
+      state.result = null;
+      render();
+    }
+
+    async function isRealWord(word) {
+      try {
+        const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`);
+        if (!res.ok) return false;
+        const data = await res.json();
+        return Array.isArray(data) && data.length > 0;
+      } catch {
+        return false;
+      }
+    }
+
+    function appendLetter(side, player, letter) {
+      if (!letter) return;
+      if (side === 'front') state.letters.unshift({ char: letter, player });
+      else state.letters.push({ char: letter, player });
+    }
+
+    function makeEntry({ cls, onLetter, placeholder = '+' }) {
+      const input = document.createElement('input');
+      input.className = `entry ${cls}`;
+      input.maxLength = 1;
+      input.placeholder = placeholder;
+      input.addEventListener('input', (e) => {
+        const letter = sanitize(e.target.value);
+        e.target.value = '';
+        if (letter) onLetter(letter);
+      });
+      return input;
+    }
+
+    function playerTitle(player) {
+      if (!state.ended || !state.winner) return `Player ${player}`;
+      if (state.winner === player) return `Player ${player} 🥪 Wins 🥪`;
+      return `Player ${player} 😢 Loses 😢`;
+    }
+
+    function playerActions(player) {
+      if (state.ended) return [];
+      if (state.letters.length === 0) {
+        return player === state.turn ? ['Enter one letter in the center box to start.'] : [`Wait for Player ${state.turn} to start.`];
+      }
+      if (state.mode === 'challenge') {
+        return player === state.challengeDefender ? ['1. Complete your word (minimum 2 letters).', 'LOCK'] : [`Wait while Player ${state.challengeDefender} completes or locks the word.`];
+      }
+      return player === state.turn ? ['Play: add one letter to the left or right edge.', 'CHALLENGE'] : ['Wait for your turn.'];
+    }
+
+    function renderCards() {
+      cards.innerHTML = '';
+      [1,2].forEach((p) => {
+        const active = !state.ended && ((state.letters.length === 0 ? state.turn : (state.mode === 'challenge' ? state.challengeDefender : state.turn)) === p);
+        const card = document.createElement('div');
+        const focusClass = state.ended ? '' : (active ? 'active' : 'inactive');
+        card.className = `card ${focusClass} ${state.ended ? (state.winner===p?'win':'lose') : ''}`;
+        card.style.borderColor = p === 1 ? '#2563eb' : '#16a34a';
+
+        const title = document.createElement('div');
+        title.className = 'title';
+        title.style.color = p === 1 ? '#1d4ed8' : '#15803d';
+        title.textContent = playerTitle(p);
+        card.appendChild(title);
+
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.textContent = `Wins: ${state.score[p].wins} · Losses: ${state.score[p].losses}`;
+        card.appendChild(meta);
+
+        const actions = playerActions(p);
+        if (active && actions.length) {
+          const ul = document.createElement('ul');
+          actions.forEach((a) => {
+            const li = document.createElement('li');
+            if (a === 'CHALLENGE') {
+              li.append('Or click ');
+              const btn = document.createElement('button');
+              btn.className = 'btn warn';
+              btn.textContent = 'Challenge';
+              btn.onclick = () => {
+                state.mode = 'challenge';
+                state.challengeBy = state.turn;
+                state.challengeDefender = state.turn === 1 ? 2 : 1;
+                render();
+              };
+              li.appendChild(btn);
+            } else if (a === 'LOCK') {
+              li.append('2. Click ');
+              const btn = document.createElement('button');
+              btn.className = 'btn ok';
+              btn.textContent = state.validating ? 'Validating...' : "I think it's a real word :)";
+              const tooShort = fragment().length < 2;
+              btn.disabled = state.validating || tooShort;
+              btn.title = tooShort ? 'Add at least one more letter before locking.' : 'Lock and validate';
+              btn.onclick = async () => {
+                if (fragment().length < 2) return;
+                state.validating = true;
+                render();
+                const word = fragment().toLowerCase();
+                const ok = await isRealWord(word);
+                const winner = ok ? state.challengeDefender : state.challengeBy;
+                const loser = winner === 1 ? 2 : 1;
+                state.validating = false;
+                state.ended = true;
+                state.winner = winner;
+                state.starter = winner;
+                state.score[winner].wins += 1;
+                state.score[loser].losses += 1;
+                state.result = { word, isRealWord: ok, winner, loser, defender: state.challengeDefender };
+                render();
+              };
+              li.appendChild(btn);
+            } else {
+              li.textContent = a;
+            }
+            ul.appendChild(li);
+          });
+          card.appendChild(ul);
+        }
+
+        if (state.ended && state.result) {
+          const msg = document.createElement('div');
+          msg.style.marginTop = '8px';
+          msg.style.fontWeight = '600';
+          if (state.result.isRealWord) {
+            msg.style.color = p === state.result.winner ? '#166534' : '#9f1239';
+            msg.innerHTML = p === state.result.winner
+              ? `<strong>${state.result.word}</strong> makes a delicious sandwich.`
+              : `No sandwich for you.`;
+          } else {
+            msg.style.color = p === state.result.winner ? '#166534' : '#9f1239';
+            msg.innerHTML = p === state.result.winner
+              ? `Player ${state.result.defender} can't spell. You get the sandwich.`
+              : `<strong>${state.result.word}</strong> isn't a word. No sandwich for you!`;
+          }
+          card.appendChild(msg);
+        }
+
+        cards.appendChild(card);
+      });
+    }
+
+    function renderBoard() {
+      board.innerHTML = '';
+      const edgeClass = state.turn === 1 ? 'p1' : 'p2';
+      const chClass = (state.challengeDefender || 1) === 1 ? 'p1' : 'p2';
+
+      if (!state.ended && state.letters.length === 0) {
+        board.appendChild(makeEntry({
+          cls: edgeClass,
+          placeholder: '?',
+          onLetter: (letter) => {
+            const starter = state.turn;
+            state.letters = [{ char: letter, player: starter }];
+            state.turn = starter === 1 ? 2 : 1;
+            render();
+          }
+        }));
+        return;
+      }
+
+      if (state.letters.length > 0) {
+        if (!state.ended && state.mode === 'normal') {
+          board.appendChild(makeEntry({ cls: edgeClass, onLetter: (letter) => {
+            appendLetter('front', state.turn, letter);
+            state.turn = state.turn === 1 ? 2 : 1;
+            render();
+          }}));
+        }
+
+        if (!state.ended && state.mode === 'challenge') {
+          board.appendChild(makeEntry({ cls: chClass, onLetter: (letter) => {
+            appendLetter('front', state.challengeDefender, letter);
+            render();
+          }}));
+        }
+
+        state.letters.forEach((c) => {
+          const d = document.createElement('div');
+          d.className = `cell ${c.player === 1 ? 'p1' : 'p2'}`;
+          d.textContent = c.char;
+          board.appendChild(d);
+        });
+
+        if (!state.ended && state.mode === 'normal') {
+          board.appendChild(makeEntry({ cls: edgeClass, onLetter: (letter) => {
+            appendLetter('back', state.turn, letter);
+            state.turn = state.turn === 1 ? 2 : 1;
+            render();
+          }}));
+        }
+
+        if (!state.ended && state.mode === 'challenge') {
+          board.appendChild(makeEntry({ cls: chClass, onLetter: (letter) => {
+            appendLetter('back', state.challengeDefender, letter);
+            render();
+          }}));
+        }
+      }
+    }
+
+    function render() {
+      renderBoard();
+      renderCards();
+    }
+
+    newRoundBtn.addEventListener('click', resetRound);
+    render();
+  </script>
+</body>
+</html>
