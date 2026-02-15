@@ -26,6 +26,7 @@
       padding: 4px 0;
       width: 100%;
       gap: 0;
+      justify-content: center;
       overflow-x: auto;
       flex-wrap: nowrap;
       -webkit-overflow-scrolling: touch;
@@ -211,7 +212,6 @@
         border-radius: 4px;
         font-size: .7rem;
       }
-      #newRound { width: 100%; min-height: 30px; }
     }
   </style>
 </head>
@@ -221,9 +221,6 @@
 
     <div class="row board" id="board"></div>
 
-    <div class="row" style="margin-top: 4px;">
-      <button class="btn" id="newRound">New Round</button>
-    </div>
     <div class="timer-status" id="timerStatus"></div>
 
     <div class="cards" id="cards"></div>
@@ -257,7 +254,7 @@
           </div>
           <div class="field">
             <label for="timerSeconds">Seconds</label>
-            <input id="timerSeconds" type="number" min="3" max="120" step="1" value="10" />
+            <input id="timerSeconds" type="number" min="3" max="120" step="1" value="30" />
           </div>
         </div>
       </div>
@@ -281,7 +278,6 @@
 
     const board = document.getElementById('board');
     const cards = document.getElementById('cards');
-    const newRoundBtn = document.getElementById('newRound');
     const timerStatus = document.getElementById('timerStatus');
     const WIKTIONARY_API_BASE = 'https://en.wiktionary.org';
     const ENGLISH_API_BASE = 'https://api.dictionaryapi.dev/api/v2/entries/en';
@@ -294,7 +290,7 @@
       langMode: 'en',
       names: { 1: 'Player 1', 2: 'Player 2' },
       timerEnabled: false,
-      timerSeconds: 10,
+      timerSeconds: 30,
     };
     const SETTINGS_STORAGE_KEY = 'wordSandwichSettings';
     let turnTimerHandle = null;
@@ -640,6 +636,15 @@
           card.appendChild(msg);
         }
 
+        if (state.ended && state.winner === p) {
+          const nextBtn = document.createElement('button');
+          nextBtn.className = 'btn warn';
+          nextBtn.style.marginTop = '6px';
+          nextBtn.textContent = 'New Round';
+          nextBtn.onclick = resetRound;
+          card.appendChild(nextBtn);
+        }
+
         if (
           state.ended &&
           state.result &&
@@ -737,7 +742,6 @@
       syncTurnTimer();
     }
 
-    newRoundBtn.addEventListener('click', resetRound);
     langModeSelect.addEventListener('change', () => {
       settings.langMode = langModeSelect.value;
       saveSettings();
