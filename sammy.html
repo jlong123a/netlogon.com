@@ -66,6 +66,19 @@
     }
     .inline-word .entry { width: 28px; height: 28px; }
     .inline-word .cell { width: 28px; height: 28px; }
+    .result-word {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      margin-top: 4px;
+      margin-bottom: 4px;
+    }
+    .result-word .cell {
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      font-size: .78rem;
+    }
     .btn {
       border: 1px solid #334155;
       background: white;
@@ -225,17 +238,16 @@
       background: #fff;
       color: #0f172a;
     }
+    .action-timer {
+      color: #475569;
+      font-size: 11px;
+      margin-left: 4px;
+    }
     .timer-fields {
       display: grid;
       grid-template-columns: 1fr 110px;
       gap: 8px;
       align-items: end;
-    }
-    .timer-status {
-      margin-top: 2px;
-      font-size: 11px;
-      color: #475569;
-      min-height: 14px;
     }
     .checkbox-row {
       display: flex;
@@ -270,10 +282,6 @@
 <body>
   <div class="wrap">
     <h1><span style="font-size:1.5em">🥖</span> Word Sandwich<span style="font-size:1.5em">🥖</span></h1>
-
-    <div class="row board" id="board"></div>
-
-    <div class="timer-status" id="timerStatus"></div>
 
     <div class="cards" id="cards"></div>
     <div class="history" id="history"></div>
@@ -310,13 +318,6 @@
             <input id="timerSeconds" type="number" min="3" max="120" step="1" value="30" />
           </div>
         </div>
-        <div class="field">
-          <label for="autoChallenge">Auto-challenge</label>
-          <div class="checkbox-row">
-            <input id="autoChallenge" type="checkbox" />
-            <span>On timeout, auto-challenge</span>
-          </div>
-        </div>
       </div>
     </details>
   </div>
@@ -327,7 +328,7 @@
     const state = {
       letters: [], // {char, player}
       turn: 1,
-      mode: 'normal', // normal | challenge
+      mode: 'normal', // normal | challenge | double
       challengeBy: null,
       challengeDefender: null,
       ended: false,
@@ -340,11 +341,11 @@
       autoLockTriggered: false,
       history: [], // newest first
       lastMainPlayer: null,
+      doubleOrNothing: null, // {winner,loser,defender,baseWord,trying,message,validating}
     };
 
     const board = document.getElementById('board');
     const cards = document.getElementById('cards');
-    const timerStatus = document.getElementById('timerStatus');
     const historyEl = document.getElementById('history');
     const WIKTIONARY_API_BASE = 'https://en.wiktionary.org';
     const ENGLISH_API_BASE = 'https://api.dictionaryapi.dev/api/v2/entries/en';
@@ -353,13 +354,11 @@
     const player2NameInput = document.getElementById('player2Name');
     const enableTimerInput = document.getElementById('enableTimer');
     const timerSecondsInput = document.getElementById('timerSeconds');
-    const autoChallengeInput = document.getElementById('autoChallenge');
     const settings = {
       langMode: 'en',
       names: { 1: 'Player 1', 2: 'Player 2' },
       timerEnabled: false,
       timerSeconds: 30,
-      autoChallenge: false,
     };
     const SETTINGS_STORAGE_KEY = 'wordSandwichSettings';
     let turnTimerHandle = null;
@@ -380,15 +379,10 @@
         const p2 = (parsed?.names?.[2] || parsed?.names?.['2'] || '').toString().trim();
         const timerEnabled = !!parsed?.timerEnabled;
         const timerSeconds = Number(parsed?.timerSeconds);
-        const autoChallenge = !!parsed?.autoChallenge;
         if (mode === 'en' || mode === 'fr' || mode === 'en-fr') settings.langMode = mode;
         if (p1) settings.names[1] = p1;
         if (p2) settings.names[2] = p2;
         settings.timerEnabled = timerEnabled;
-        settings.autoChallenge = autoChallenge;
-        if (settings.timerEnabled && parsed?.autoChallenge === undefined) {
-          settings.autoChallenge = true; // default on when enabling timer without prior setting
-        }
         if (Number.isFinite(timerSeconds) && timerSeconds >= 3 && timerSeconds <= 120) {
           settings.timerSeconds = Math.floor(timerSeconds);
         }
@@ -416,18 +410,13 @@
 
     function activeTimedPlayer() {
       if (!settings.timerEnabled || state.ended || state.validating) return null;
+      if (state.mode === 'double') return null;
       if (state.letters.length === 0) return null; // no timer on the very first turn before any letter is placed
       return state.mode === 'challenge' ? state.challengeDefender : state.turn;
     }
 
     function updateTimerStatus() {
-      const player = activeTimedPlayer();
-      if (!settings.timerEnabled || !player || turnSecondsLeft <= 0) {
-        timerStatus.textContent = '';
-        renderHistory();
-        return;
-      }
-      timerStatus.textContent = `${playerName(player)}: ${turnSecondsLeft}s`;
+      updateActionTimers();
       renderHistory();
     }
 
@@ -436,22 +425,24 @@
       const lettersCount = fragment().length;
       const hasEnoughLetters = lettersCount >= MIN_WORD_LENGTH;
       const opponent = slowPlayer === 1 ? 2 : 1;
-      const autoOn = settings.timerEnabled && settings.autoChallenge;
+      const autoOn = settings.timerEnabled;
 
       // Normal mode: auto-challenge if possible
       if (state.mode === 'normal' && autoOn) {
         if (hasEnoughLetters) {
+          logAutoChallenge(slowPlayer);
+          logTimeout(slowPlayer);
           state.mode = 'challenge';
           state.challengeBy = slowPlayer;
           state.challengeDefender = opponent;
           state.autoChallengeTriggered = true;
           state.autoLockTriggered = false;
-          logChallenge(slowPlayer, true);
           clearTurnTimer(false);
           render();
           return;
         }
         // Cannot challenge due to length -> draw
+        logTimeout(slowPlayer);
         state.ended = true;
         state.winner = null;
         state.result = { reason: 'draw', cause: 'timeout-short', slowPlayer };
@@ -464,6 +455,7 @@
       if (state.mode === 'challenge' && autoOn && slowPlayer === state.challengeDefender) {
         const autoChain = state.autoChallengeTriggered && !state.autoLockTriggered;
         if (!hasEnoughLetters) {
+          logTimeout(slowPlayer);
           state.ended = true;
           state.winner = null;
           state.result = { reason: 'draw', cause: 'timeout-short', slowPlayer };
@@ -473,7 +465,8 @@
         }
         if (autoChain) {
           state.autoLockTriggered = true;
-          logCheck(slowPlayer, true);
+          logAutoCheck(slowPlayer);
+          logTimeout(slowPlayer);
           state.ended = true;
           state.winner = null;
           state.result = { reason: 'draw', cause: 'auto-chain', slowPlayer };
@@ -483,7 +476,8 @@
         }
         // Manual challenge, auto lock: validate word
         state.autoLockTriggered = true;
-        logCheck(slowPlayer, true);
+        logAutoCheck(slowPlayer);
+        logTimeout(slowPlayer);
         (async () => {
           state.validating = true;
           render();
@@ -493,29 +487,37 @@
           const winner = ok ? state.challengeDefender : state.challengeBy;
           const loser = winner === 1 ? 2 : 1;
           state.validating = false;
-          state.ended = true;
-          state.winner = winner;
-          state.starter = winner;
-          state.score[winner].wins += 1;
-          state.score[loser].losses += 1;
-          state.result = {
-            reason: 'word',
-            word,
-            isRealWord: ok,
+          if (!ok) {
+            enterDoubleOrNothing({
+              winner,
+              loser,
+              defender: state.challengeDefender,
+              baseWord: word,
+            });
+            return;
+          }
+          finalizeRound({
             winner,
             loser,
-            defender: state.challengeDefender,
-            wordInfo: verdict.info,
-            autoLock: true,
-          };
-          clearTurnTimer();
-          render();
+            points: 1,
+            result: {
+              reason: 'word',
+              word,
+              isRealWord: true,
+              winner,
+              loser,
+              defender: state.challengeDefender,
+              wordInfo: verdict.info,
+              autoLock: true,
+            }
+          });
         })();
         return;
       }
 
       // Fallbacks (no auto or other cases)
       if (!hasEnoughLetters) {
+        logTimeout(slowPlayer);
         state.ended = true;
         state.winner = null;
         state.result = { reason: 'draw', cause: 'timeout-short', slowPlayer };
@@ -526,6 +528,7 @@
 
       const winner = slowPlayer === 1 ? 2 : 1;
       const loser = slowPlayer;
+      logTimeout(slowPlayer);
       state.ended = true;
       state.winner = winner;
       state.starter = winner;
@@ -578,6 +581,38 @@
       state.result = null;
       state.history = [];
       state.lastMainPlayer = null;
+      state.doubleOrNothing = null;
+      clearAutoFlags();
+      render();
+    }
+
+    function finalizeRound({ winner, loser, result, points = 1 }) {
+      state.ended = true;
+      state.mode = 'normal';
+      state.winner = winner;
+      state.starter = winner;
+      state.score[winner].wins += points;
+      state.score[loser].losses += 1;
+      state.result = result;
+      state.doubleOrNothing = null;
+      clearTurnTimer();
+      render();
+    }
+
+    function enterDoubleOrNothing({ winner, loser, defender, baseWord }) {
+      state.ended = false;
+      state.mode = 'double';
+      state.winner = winner;
+      state.doubleOrNothing = {
+        winner,
+        loser,
+        defender,
+        baseWord,
+        trying: false,
+        message: '',
+        validating: false,
+      };
+      clearTurnTimer();
       render();
     }
 
@@ -600,6 +635,22 @@
 
     function playerName(player) {
       return settings.names[player] || `Player ${player}`;
+    }
+
+    function createActionTimerSpan(player) {
+      const span = document.createElement('span');
+      span.className = 'action-timer';
+      span.dataset.player = String(player);
+      return span;
+    }
+
+    function updateActionTimers() {
+      const timedPlayer = activeTimedPlayer();
+      const timeText = (settings.timerEnabled && turnSecondsLeft > 0) ? `${turnSecondsLeft}s` : '';
+      document.querySelectorAll('.action-timer').forEach((el) => {
+        const player = Number(el.dataset.player);
+        el.textContent = timedPlayer === player ? timeText : '';
+      });
     }
 
     async function isEnglishWord(word) {
@@ -677,10 +728,45 @@
     function logCheck(player, auto = false) {
       const word = fragment();
       const wordText = word ? `"${word.toUpperCase()}"` : '';
+      const attachAsSub = state.lastMainPlayer === player;
       pushHistory({
         text: `${playerName(player)} ${auto ? 'auto-checks' : 'checks'} ${wordText}`.trim(),
         fragment: formatFragmentWithHighlight(null),
+        sub: attachAsSub,
+        player,
+      });
+      if (!attachAsSub) state.lastMainPlayer = player;
+    }
+
+    function logTimeout(player) {
+      pushHistory({
+        text: `${playerName(player)}'s time ran out`,
+        fragment: null,
+        sub: false,
+        player,
+      });
+      state.lastMainPlayer = player;
+    }
+
+    function logAutoChallenge(player) {
+      const word = fragment();
+      const wordText = word ? ` "${word.toUpperCase()}"` : '';
+      pushHistory({
+        text: `${playerName(player)} auto-challenges${wordText}`,
+        fragment: null,
         sub: true,
+        player,
+      });
+    }
+
+    function logAutoCheck(player) {
+      const word = fragment();
+      const wordText = word ? ` "${word.toUpperCase()}"` : '';
+      pushHistory({
+        text: `${playerName(player)} auto-checks${wordText}`,
+        fragment: null,
+        sub: true,
+        player,
       });
     }
 
@@ -695,6 +781,7 @@
         text: `${playerName(player)} ${verb} ${letter.toUpperCase()}`,
         fragment: formatFragmentWithHighlight(idx),
         sub: attachAsSub,
+        player,
       };
       pushHistory(entry);
       if (!attachAsSub) state.lastMainPlayer = player;
@@ -705,6 +792,7 @@
         text: `${playerName(player)} challenges${auto ? ' (auto)' : ''}`,
         fragment: formatFragmentWithHighlight(null),
         sub: false,
+        player,
       });
       state.lastMainPlayer = player;
     }
@@ -750,7 +838,23 @@
       return row;
     }
 
+    function resultWordRow() {
+      const row = document.createElement('div');
+      row.className = 'result-word';
+      state.letters.forEach((c) => {
+        const d = document.createElement('div');
+        d.className = `cell ${c.player === 1 ? 'p1' : 'p2'}`;
+        d.textContent = c.char;
+        row.appendChild(d);
+      });
+      return row;
+    }
+
     function playerTitle(player) {
+      if (state.mode === 'double' && state.doubleOrNothing) {
+        if (player === state.doubleOrNothing.winner) return `${playerName(player)} Wins`;
+        if (player === state.doubleOrNothing.loser) return `${playerName(player)} Loses`;
+      }
       if (!state.ended) return playerName(player);
       if (state.winner === null) return `${playerName(player)} Draw`;
       if (state.winner === player) return `${playerName(player)} Wins`;
@@ -759,6 +863,15 @@
 
     function playerActions(player) {
       if (state.ended) return [];
+      if (state.mode === 'double' && state.doubleOrNothing) {
+        if (player !== state.doubleOrNothing.winner) {
+          return [{ type: 'text', text: `Wait for ${playerName(state.doubleOrNothing.winner)}.` }];
+        }
+        if (!state.doubleOrNothing.trying) {
+          return [{ type: 'double_take' }, { type: 'double_try' }, { type: 'double_word_preview' }];
+        }
+        return [{ type: 'double_take' }, { type: 'double_add' }, { type: 'double_check' }];
+      }
       const waitTurn = [{ type: 'text', text: `Wait for ${playerName(state.mode === 'challenge' ? state.challengeDefender : state.turn)}.` }];
       if (state.letters.length === 0) {
         return player === state.turn ? [{ type: 'add' }] : waitTurn;
@@ -774,14 +887,19 @@
 
     function renderCards() {
       cards.innerHTML = '';
-      const activePlayer = state.letters.length === 0
-        ? state.turn
-        : (state.mode === 'challenge' ? state.challengeDefender : state.turn);
+      const activePlayer = state.mode === 'double' && state.doubleOrNothing
+        ? state.doubleOrNothing.winner
+        : (state.letters.length === 0
+          ? state.turn
+          : (state.mode === 'challenge' ? state.challengeDefender : state.turn));
       const firstPlayer = state.ended && state.winner ? state.winner : activePlayer;
       const secondPlayer = firstPlayer === 1 ? 2 : 1;
 
       [firstPlayer, secondPlayer].forEach((p) => {
-        const active = !state.ended && ((state.letters.length === 0 ? state.turn : (state.mode === 'challenge' ? state.challengeDefender : state.turn)) === p);
+        const actingPlayer = state.mode === 'double' && state.doubleOrNothing
+          ? state.doubleOrNothing.winner
+          : (state.letters.length === 0 ? state.turn : (state.mode === 'challenge' ? state.challengeDefender : state.turn));
+        const active = !state.ended && (actingPlayer === p);
         const card = document.createElement('div');
         const focusClass = state.ended ? '' : (active ? 'active' : 'inactive');
         const outcomeClass = state.ended ? (state.winner === null ? 'draw' : (state.winner===p?'win':'lose')) : '';
@@ -798,7 +916,7 @@
 
         const meta = document.createElement('div');
         meta.className = 'meta';
-        meta.textContent = `W: ${state.score[p].wins}  L: ${state.score[p].losses}`;
+        meta.textContent = `Points: ${state.score[p].wins}`;
         head.appendChild(meta);
         card.appendChild(head);
 
@@ -809,6 +927,100 @@
             const li = document.createElement('li');
             if (action.type === 'text') {
               li.textContent = action.text;
+            } else if (action.type === 'double_take') {
+              const btn = document.createElement('button');
+              btn.className = 'btn warn';
+              btn.textContent = 'Take the win';
+              btn.onclick = () => {
+                const d = state.doubleOrNothing;
+                if (!d) return;
+                finalizeRound({
+                  winner: d.winner,
+                  loser: d.loser,
+                  points: 1,
+                  result: {
+                    reason: 'word',
+                    word: d.baseWord,
+                    isRealWord: false,
+                    winner: d.winner,
+                    loser: d.loser,
+                    defender: d.defender,
+                    wordInfo: null,
+                    doubleResolved: 'take',
+                  }
+                });
+              };
+              li.appendChild(btn);
+              li.append(' (1 point)');
+            } else if (action.type === 'double_try') {
+              const btn = document.createElement('button');
+              btn.className = 'btn ok';
+              btn.textContent = 'Try to finish the word';
+              btn.onclick = () => {
+                if (!state.doubleOrNothing) return;
+                state.doubleOrNothing.trying = true;
+                state.doubleOrNothing.message = '';
+                render();
+              };
+              li.appendChild(btn);
+              li.append(' (2 points)');
+            } else if (action.type === 'double_word_preview') {
+              li.appendChild(resultWordRow());
+            } else if (action.type === 'double_add') {
+              li.append(document.createTextNode('Add letters to finish: '));
+              const d = state.doubleOrNothing;
+              const front = makeEntry({ cls: d.winner === 1 ? 'p1' : 'p2', placeholder: '?', onLetter: (letter) => {
+                addLetterAndLog('front', d.winner, letter, 'add');
+                if (state.doubleOrNothing) state.doubleOrNothing.message = '';
+                render();
+              }});
+              const back = makeEntry({ cls: d.winner === 1 ? 'p1' : 'p2', placeholder: '?', onLetter: (letter) => {
+                addLetterAndLog('back', d.winner, letter, 'add');
+                if (state.doubleOrNothing) state.doubleOrNothing.message = '';
+                render();
+              }});
+              const row = inlineWordRow({ front, back });
+              row.style.display = 'flex';
+              li.appendChild(row);
+            } else if (action.type === 'double_check') {
+              li.append('Check for 2 points ');
+              const btn = document.createElement('button');
+              btn.className = 'btn ok';
+              const d = state.doubleOrNothing;
+              btn.textContent = d && d.validating ? 'Validating...' : 'Check word';
+              btn.disabled = (d && d.validating) || fragment().length < MIN_WORD_LENGTH;
+              btn.onclick = async () => {
+                if (!state.doubleOrNothing || fragment().length < MIN_WORD_LENGTH) return;
+                const d2 = state.doubleOrNothing;
+                d2.validating = true;
+                d2.message = '';
+                render();
+                const word = fragment().toLowerCase();
+                const verdict = await isRealWord(word);
+                d2.validating = false;
+                if (!verdict.ok) {
+                  d2.message = `"${word.toUpperCase()}" isn't a real word yet.`;
+                  render();
+                  return;
+                }
+                logCheck(d2.winner, false);
+                finalizeRound({
+                  winner: d2.winner,
+                  loser: d2.loser,
+                  points: 2,
+                  result: {
+                    reason: 'word',
+                    word,
+                    isRealWord: true,
+                    winner: d2.winner,
+                    loser: d2.loser,
+                    defender: d2.defender,
+                    wordInfo: verdict.info,
+                    doubleResolved: 'finish',
+                  }
+                });
+              };
+              li.appendChild(btn);
             } else if (action.type === 'challenge') {
               li.append('Or ');
               const btn = document.createElement('button');
@@ -843,25 +1055,34 @@
                 const winner = ok ? state.challengeDefender : state.challengeBy;
                 const loser = winner === 1 ? 2 : 1;
                 state.validating = false;
-                state.ended = true;
-                state.winner = winner;
-                state.starter = winner;
-                state.score[winner].wins += 1;
-                state.score[loser].losses += 1;
-                state.result = {
-                  reason: 'word',
-                  word,
-                  isRealWord: ok,
+                if (!ok) {
+                  enterDoubleOrNothing({
+                    winner,
+                    loser,
+                    defender: state.challengeDefender,
+                    baseWord: word,
+                  });
+                  return;
+                }
+                finalizeRound({
                   winner,
                   loser,
-                  defender: state.challengeDefender,
-                  wordInfo: verdict.info
-                };
-                render();
+                  points: 1,
+                  result: {
+                    reason: 'word',
+                    word,
+                    isRealWord: true,
+                    winner,
+                    loser,
+                    defender: state.challengeDefender,
+                    wordInfo: verdict.info
+                  }
+                });
               };
               li.appendChild(btn);
             } else if (action.type === 'add') {
-              li.append(document.createTextNode('1. Add a letter: '));
+              li.append(document.createTextNode('Add a letter: '));
+              li.appendChild(createActionTimerSpan(p));
               if (state.letters.length === 0) {
                 const entry = makeEntry({ cls: p === 1 ? 'p1' : 'p2', placeholder: '?', onLetter: (letter) => {
                   const starter = state.turn;
@@ -869,7 +1090,9 @@
                   state.turn = starter === 1 ? 2 : 1;
                   render();
                 }});
-                li.appendChild(inlineWordRow({ front: entry }));
+                const row = inlineWordRow({ front: entry });
+                row.style.display = 'flex';
+                li.appendChild(row);
               } else {
                 const front = makeEntry({ cls: p === 1 ? 'p1' : 'p2', placeholder: '?', onLetter: (letter) => {
                   addLetterAndLog('front', p, letter, 'add');
@@ -881,10 +1104,20 @@
                   state.turn = p === 1 ? 2 : 1;
                   render();
                 }});
-                li.appendChild(inlineWordRow({ front, back }));
+                const row = inlineWordRow({ front, back });
+                row.style.display = 'flex';
+                li.appendChild(row);
+              }
+              if (state.letters.length < MIN_WORD_LENGTH) {
+                const note = document.createElement('div');
+                note.style.fontSize = '10px';
+                note.style.marginTop = '4px';
+                note.innerHTML = '<strong>Note:</strong> minimum 3 letters before you can challenge';
+                li.appendChild(note);
               }
             } else if (action.type === 'finish') {
-              li.append(document.createTextNode('1. Finish word: '));
+              li.append(document.createTextNode('1. Finish the word: '));
+              li.appendChild(createActionTimerSpan(state.challengeDefender));
               const front = makeEntry({ cls: state.challengeDefender === 1 ? 'p1' : 'p2', placeholder: '?', onLetter: (letter) => {
                 addLetterAndLog('front', state.challengeDefender, letter, 'add');
                 render();
@@ -893,14 +1126,42 @@
                 addLetterAndLog('back', state.challengeDefender, letter, 'add');
                 render();
               }});
-              li.appendChild(inlineWordRow({ front, back }));
+              const row = inlineWordRow({ front, back });
+              row.style.display = 'flex';
+              li.appendChild(row);
             }
             ul.appendChild(li);
           });
           card.appendChild(ul);
         }
 
+        if (state.mode === 'double' && state.doubleOrNothing && p === state.doubleOrNothing.winner) {
+          const doubleMsg = document.createElement('div');
+          doubleMsg.style.marginTop = '6px';
+          doubleMsg.style.fontSize = '12px';
+          doubleMsg.style.fontWeight = '600';
+          doubleMsg.style.color = '#166534';
+          doubleMsg.textContent = `${playerName(state.doubleOrNothing.defender)} can't spell.`;
+          card.appendChild(doubleMsg);
+
+          if (state.doubleOrNothing.message) {
+            const msg = document.createElement('div');
+            msg.style.marginTop = '4px';
+            msg.style.fontSize = '11px';
+            msg.style.color = '#9f1239';
+            msg.textContent = state.doubleOrNothing.message;
+            card.appendChild(msg);
+          }
+        }
+
         if (state.ended && state.result) {
+          const showResultWord =
+            state.result.reason === 'word' &&
+            ((state.result.isRealWord && p === state.result.winner) ||
+             (!state.result.isRealWord && p === state.result.loser));
+          if (showResultWord) {
+            card.appendChild(resultWordRow());
+          }
           const msg = document.createElement('div');
           msg.style.marginTop = '8px';
           msg.style.fontWeight = '400';
@@ -915,14 +1176,17 @@
               : `You snooze, you lose!`;
           } else if (state.result.isRealWord) {
             msg.style.color = p === state.result.winner ? '#166534' : '#9f1239';
-            msg.innerHTML = p === state.result.winner
-              ? `<strong>"${state.result.word.toUpperCase()}"</strong> makes a delicious sandwich.`
-              : `No sandwich for you.`;
+            const outcomeLine = p === state.result.winner
+              ? 'makes a delicious sandwich.'
+              : 'No sandwich for you.';
+            msg.innerHTML = outcomeLine;
           } else {
             msg.style.color = p === state.result.winner ? '#166534' : '#9f1239';
-            msg.innerHTML = p === state.result.winner
-              ? `<strong>${playerName(state.result.defender)}</strong> can't spell. You get the sandwich.`
-              : `<strong>"${state.result.word.toUpperCase()}"</strong> isn't a word. No sandwich for you!`;
+            if (p === state.result.winner) {
+              msg.innerHTML = `<strong>${playerName(state.result.defender)}</strong> can't spell. You get the sandwich.`;
+            } else {
+              msg.innerHTML = `isn't a real word.`;
+            }
           }
           card.appendChild(msg);
         }
@@ -975,7 +1239,9 @@
       if (r.reason === 'word') {
         return {
           title: `${playerName(r.winner)} wins!`,
-          detail: wordText ? `${wordText} is a real word` : 'Checks and wins',
+          detail: wordText
+            ? (r.isRealWord ? `${wordText} is a real word` : `${wordText} isn't a real word`)
+            : 'Checks and wins',
         };
       }
       if (r.reason === 'auto-challenge') {
@@ -1001,6 +1267,9 @@
 
     function currentMoveText() {
       if (state.ended) return endSummaryText();
+      if (state.mode === 'double' && state.doubleOrNothing) {
+        return `${playerName(state.doubleOrNothing.winner)} - Double or nothing`;
+      }
       const player = state.mode === 'challenge' ? state.challengeDefender : state.turn;
       if (state.letters.length === 0) {
         return `${playerName(player)} - Waiting to enter first letters`;
@@ -1016,15 +1285,22 @@
       title.textContent = 'Moves';
       historyEl.appendChild(title);
 
+      const livePlayer = state.mode === 'challenge' ? state.challengeDefender : state.turn;
+      const firstMain = state.history.find(h => !h.sub);
+      const attachLiveAsSub = !state.ended && firstMain && firstMain.player === livePlayer;
+      const hasStandaloneCurrentMove = !state.ended && !attachLiveAsSub;
+
       const ol = document.createElement('ol');
       ol.reversed = true;
-      const nonSubCount = state.history.filter(h => !h.sub).length + (state.ended ? 0 : 1);
+      const nonSubCount = state.history.filter(h => !h.sub).length + (hasStandaloneCurrentMove ? 1 : 0);
       ol.start = nonSubCount || 1;
 
       let currentLi = null;
       let pendingSubs = [];
+      let liveSubAttached = false;
+      let liveSubParent = null;
 
-      if (!state.ended) {
+      if (hasStandaloneCurrentMove) {
         currentLi = document.createElement('li');
         currentLi.innerHTML = currentMoveText();
         ol.appendChild(currentLi);
@@ -1044,6 +1320,7 @@
         }
         currentLi = document.createElement('li');
         currentLi.innerHTML = h.fragment ? `${h.text} - ${h.fragment}` : h.text;
+        if (!liveSubAttached && attachLiveAsSub && !liveSubParent) liveSubParent = currentLi;
         if (pendingSubs.length) {
           for (let i = pendingSubs.length - 1; i >= 0; i -= 1) {
             const subEntry = pendingSubs[i];
@@ -1068,11 +1345,20 @@
         pendingSubs = [];
       }
 
+      if (!liveSubAttached && attachLiveAsSub && liveSubParent) {
+        const liveSub = document.createElement('div');
+        liveSub.className = 'history-sub';
+        liveSub.innerHTML = currentMoveText();
+        liveSubParent.appendChild(liveSub);
+        liveSubAttached = true;
+      }
+
       if (state.ended && state.result) {
         const finalDiv = document.createElement('div');
         finalDiv.className = 'history-final';
         const summary = endSummaryText();
-        finalDiv.innerHTML = summary.detail
+        const showDetail = state.result.reason !== 'word';
+        finalDiv.innerHTML = (showDetail && summary.detail)
           ? `FINAL - <strong>${summary.title}</strong><br/>${summary.detail}`
           : `FINAL - <strong>${summary.title}</strong>`;
         historyEl.appendChild(finalDiv);
@@ -1082,6 +1368,7 @@
     }
 
     function renderBoard() {
+      if (!board) return;
       board.innerHTML = '';
       if (state.letters.length === 0) {
         const placeholder = document.createElement('div');
@@ -1125,11 +1412,6 @@
     enableTimerInput.addEventListener('change', () => {
       settings.timerEnabled = enableTimerInput.checked;
       timerSecondsInput.disabled = !settings.timerEnabled;
-      autoChallengeInput.disabled = !settings.timerEnabled;
-      if (settings.timerEnabled) {
-        settings.autoChallenge = true; // default to enabled when timer is turned on
-        autoChallengeInput.checked = true;
-      }
       turnTimerContext = '';
       saveSettings();
       syncTurnTimer();
@@ -1142,10 +1424,6 @@
       saveSettings();
       syncTurnTimer();
     });
-    autoChallengeInput.addEventListener('change', () => {
-      settings.autoChallenge = !!autoChallengeInput.checked;
-      saveSettings();
-    });
     loadSettings();
     player1NameInput.value = settings.names[1];
     player2NameInput.value = settings.names[2];
@@ -1153,8 +1431,6 @@
     enableTimerInput.checked = settings.timerEnabled;
     timerSecondsInput.value = String(settings.timerSeconds);
     timerSecondsInput.disabled = !settings.timerEnabled;
-    autoChallengeInput.checked = settings.autoChallenge;
-    autoChallengeInput.disabled = !settings.timerEnabled;
     render();
   </script>
 </body>
